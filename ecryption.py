@@ -1,129 +1,135 @@
 import os
 import base64
-import hashlib
-import hmac
+import argparse
 
-# Функция для добавления PKCS#7 паддинга
-def pkcs7_padding(data, block_size):
-    pad_len = block_size - (len(data) % block_size)
-    padding = bytes([pad_len] * pad_len)
-    return data + padding
+# Функция шифрования с использованием OTP
+def encrypt(message, key):
+    # Преобразуем сообщение в байты
+    message_bytes = message.encode('utf-8')
+    
+    if len(key) != len(message_bytes):
+        raise ValueError("Длина ключа должна совпадать с длиной сообщения.")
 
-# Функция для удаления PKCS#7 паддинга
-def pkcs7_unpadding(data):
-    pad_len = data[-1]
-    if pad_len > len(data):
-        raise ValueError("Неверный паддинг.")
-    return data[:-pad_len]
+    # Применяем XOR между каждым байтом сообщения и ключа
+    encrypted_bytes = bytes([m ^ k for m, k in zip(message_bytes, key)])
+    return encrypted_bytes
 
-# Функция для генерации раундовых ключей из основного ключа
-def generate_round_keys(key, num_rounds, block_size):
-    round_keys = []
-    for i in range(num_rounds):
-        # Используем HMAC-SHA256 для генерации раундовых ключей
-        h = hmac.new(key, i.to_bytes(4, 'big'), hashlib.sha256)
-        round_key = h.digest()[:block_size]
-        round_keys.append(round_key)
-    return round_keys
+# Функция дешифрования с использованием OTP
+def decrypt(ciphertext, key):
+    if len(key) != len(ciphertext):
+        raise ValueError("Длина ключа должна совпадать с длиной шифротекста.")
 
-# Функция F для сети Фейстеля
-def F(Ri, Ki):
-    # Используем HMAC-SHA256 в качестве функции F
-    h = hmac.new(Ki, Ri, hashlib.sha256)
-    return h.digest()[:len(Ri)]
-
-# Функция шифрования с использованием сети Фейстеля
-def encrypt(key, plaintext):
-    block_size = 8  # Размер половины блока в байтах
-    num_rounds = 16  # Количество раундов
-
-    # Добавляем PKCS#7 паддинг к сообщению
-    plaintext_bytes = pkcs7_padding(plaintext.encode('utf-8'), block_size * 2)
-
-    # Разбиваем сообщение на блоки
-    blocks = [plaintext_bytes[i:i + block_size * 2] for i in range(0, len(plaintext_bytes), block_size * 2)]
-
-    ciphertext = b''
-
-    # Генерируем раундовые ключи
-    round_keys = generate_round_keys(key, num_rounds, block_size)
-
-    for block in blocks:
-        # Инициализируем L и R
-        L = block[:block_size]
-        R = block[block_size:]
-
-        # Раунды сети Фейстеля
-        for i in range(num_rounds):
-            # Сохраняем значение R для следующей итерации
-            temp_R = R
-            # Вычисляем F функцию
-            f_output = F(R, round_keys[i])
-            # Новый L — это R
-            R = bytes([l ^ f for l, f in zip(L, f_output)])
-            L = temp_R
-
-        # Объединяем L и R (без финального обмена)
-        ciphertext_block = L + R
-        ciphertext += ciphertext_block
-
-    # Возвращаем шифротекст в виде строки Base64
-    return base64.b64encode(ciphertext).decode('utf-8')
-
-# Функция дешифрования с использованием сети Фейстеля
-def decrypt(key, b64_ciphertext):
-    ciphertext = base64.b64decode(b64_ciphertext)
-    block_size = 8  # Размер половины блока в байтах
-    num_rounds = 16  # Количество раундов
-
-    # Разбиваем шифротекст на блоки
-    blocks = [ciphertext[i:i + block_size * 2] for i in range(0, len(ciphertext), block_size * 2)]
-
-    plaintext = b''
-
-    # Генерируем раундовые ключи
-    round_keys = generate_round_keys(key, num_rounds, block_size)
-
-    for block in blocks:
-        # Инициализируем L и R
-        L = block[:block_size]
-        R = block[block_size:]
-
-        # Обратные раунды сети Фейстеля
-        for i in reversed(range(num_rounds)):
-            # Сохраняем значение L для следующей итерации
-            temp_L = L
-            # Вычисляем F функцию
-            f_output = F(L, round_keys[i])
-            # Новый R — это L
-            L = bytes([r ^ f for r, f in zip(R, f_output)])
-            R = temp_L
-
-        # Объединяем L и R (без финального обмена)
-        plaintext_block = L + R
-        plaintext += plaintext_block
-
-    # Убираем PKCS#7 паддинг
+    # Применяем XOR между каждым байтом шифротекста и ключа
+    decrypted_bytes = bytes([c ^ k for c, k in zip(ciphertext, key)])
+    # Декодируем байты в строку
     try:
-        plaintext_bytes = pkcs7_unpadding(plaintext)
-    except Exception:
-        raise ValueError("Ошибка при удалении паддинга. Возможно, неверный ключ или поврежден шифротекст.")
+        return decrypted_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        raise ValueError("Не удалось декодировать расшифрованный текст. Возможно, ключ или шифротекст повреждены.")
 
-    # Преобразуем байты в строку
-    return plaintext_bytes.decode('utf-8')
+# Функция для сохранения данных в файл
+def save_to_file(data, filename):
+    try:
+        with open(filename, 'wb') as f:
+            f.write(data)
+        return True
+    except Exception as e:
+        print(f"Ошибка при сохранении файла: {e}")
+        return False
+
+# Функция для загрузки данных из файла
+def load_from_file(filename):
+    try:
+        with open(filename, 'rb') as f:
+            return f.read()
+    except Exception as e:
+        print(f"Ошибка при чтении файла: {e}")
+        return None
 
 # Основная часть программы
 if __name__ == "__main__":
-    # Ввод ключа и сообщения
-    key_input = input("Введите ключ для шифрования: ")
-    key_bytes = key_input.encode('utf-8')
+    parser = argparse.ArgumentParser(description='Шифрование и дешифрование с использованием одноразового блокнота (OTP)')
+    parser.add_argument('--mode', choices=['encrypt', 'decrypt'], default='encrypt', help='Режим работы: шифрование или дешифрование')
+    parser.add_argument('--key-file', help='Файл для сохранения/загрузки ключа')
+    parser.add_argument('--message-file', help='Файл для сохранения/загрузки сообщения')
+    parser.add_argument('--ciphertext-file', help='Файл для сохранения/загрузки шифротекста')
+    args = parser.parse_args()
 
-    message = input("Введите текст для шифрования: ")
+    if args.mode == 'encrypt':
+        # Запрашиваем у пользователя текст для шифрования
+        message = input("Введите текст для шифрования: ")
 
-    # Шифрование
-    encrypted = encrypt(key_bytes, message)
-    print("\nЗашифрованный текст (Base64):\n", encrypted)
+        # Преобразуем сообщение в байты
+        message_bytes = message.encode('utf-8')
 
-    # Дешифрование
-    decrypted = decrypt(key_bytes, encrypted)
-    print("\nРасшифрованный текст:\n", decrypted)
+        # Генерируем ключ той же длины, что и байтовое представление сообщения
+        key = os.urandom(len(message_bytes))
+        key_b64 = base64.b64encode(key).decode('utf-8')
+        print("\nСгенерированный ключ (в Base64):\n", key_b64)
+
+        # Сохраняем ключ в файл, если указан путь
+        if args.key_file:
+            if save_to_file(key, args.key_file):
+                print(f"Ключ сохранен в файл: {args.key_file}")
+
+        # Шифруем текст
+        try:
+            encrypted_bytes = encrypt(message, key)
+            encrypted_b64 = base64.b64encode(encrypted_bytes).decode('utf-8')
+            print("\nЗашифрованный текст (в Base64):\n", encrypted_b64)
+
+            # Сохраняем шифротекст в файл, если указан путь
+            if args.ciphertext_file:
+                if save_to_file(encrypted_bytes, args.ciphertext_file):
+                    print(f"Шифротекст сохранен в файл: {args.ciphertext_file}")
+                    
+            # Проверочная расшифровка
+            decrypted_text = decrypt(encrypted_bytes, key)
+            print("\nПроверка расшифровки:\n", decrypted_text)
+            
+        except ValueError as e:
+            print("\nОшибка при шифровании текста:\n", e)
+
+    elif args.mode == 'decrypt':
+        # Загружаем ключ
+        key = None
+        if args.key_file:
+            key = load_from_file(args.key_file)
+            if key:
+                print(f"Ключ загружен из файла: {args.key_file}")
+        
+        if not key:
+            key_b64 = input("Введите ключ в формате Base64: ")
+            try:
+                key = base64.b64decode(key_b64)
+            except:
+                print("Ошибка декодирования ключа. Проверьте формат Base64.")
+                exit(1)
+
+        # Загружаем шифротекст
+        ciphertext = None
+        if args.ciphertext_file:
+            ciphertext = load_from_file(args.ciphertext_file)
+            if ciphertext:
+                print(f"Шифротекст загружен из файла: {args.ciphertext_file}")
+        
+        if not ciphertext:
+            ciphertext_b64 = input("Введите шифротекст в формате Base64: ")
+            try:
+                ciphertext = base64.b64decode(ciphertext_b64)
+            except:
+                print("Ошибка декодирования шифротекста. Проверьте формат Base64.")
+                exit(1)
+
+        # Дешифруем текст
+        try:
+            decrypted_text = decrypt(ciphertext, key)
+            print("\nРасшифрованный текст:\n", decrypted_text)
+            
+            # Сохраняем расшифрованное сообщение в файл, если указан путь
+            if args.message_file:
+                if save_to_file(decrypted_text.encode('utf-8'), args.message_file):
+                    print(f"Расшифрованный текст сохранен в файл: {args.message_file}")
+                    
+        except ValueError as e:
+            print("\nОшибка при расшифровке текста:\n", e)
